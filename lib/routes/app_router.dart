@@ -54,7 +54,8 @@ final appRouter = GoRouter(
     ),
     GoRoute(
       path: '/alarm-ringing',
-      builder: (_, _) => const AlarmRingingScreen(),
+      builder: (context, state) =>
+          AlarmRingingScreen(alarmId: state.uri.queryParameters['alarmId']),
     ),
   ],
 );

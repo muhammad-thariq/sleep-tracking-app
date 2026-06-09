@@ -1,26 +1,79 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../models/mock_data.dart';
+import '../models/sleep_session.dart';
+import '../services/auto_tracking_service.dart';
+import '../services/formatting.dart';
+import '../services/manual_tracking_service.dart';
+import '../state/preferences_provider.dart';
+import '../state/repositories.dart';
+import '../state/session_providers.dart';
+import '../state/tracking_controller.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/pill_badge.dart';
 import '../widgets/sleep_app_bar.dart';
 import '../widgets/surface_card.dart';
 
-class DashboardScreen extends StatefulWidget {
+class DashboardScreen extends ConsumerStatefulWidget {
   const DashboardScreen({super.key});
 
   @override
-  State<DashboardScreen> createState() => _DashboardScreenState();
+  ConsumerState<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
-  bool _autoTracking = true;
+class _DashboardScreenState extends ConsumerState<DashboardScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _recoverOrphans());
+  }
+
+  /// On launch, surface any session left un-finalized by an app kill mid-track.
+  Future<void> _recoverOrphans() async {
+    final repo = ref.read(sleepSessionRepositoryProvider);
+    final orphans = repo.getOrphaned();
+    if (orphans.isEmpty || !mounted) return;
+    final orphan = orphans.first;
+
+    final finalize = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text('Unfinished session'),
+        content: Text(
+          'A sleep session from ${Fmt.clock(orphan.startedAt)} was never '
+          'stopped (the app may have closed). Save it or discard it?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Discard'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (finalize == true) {
+      await repo.finalizeOrphan(orphan);
+    } else {
+      await repo.delete(orphan.id);
+    }
+    ref.invalidate(latestSessionProvider);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final session = mockLatestSession;
+    final latest = ref.watch(latestSessionProvider);
+    final prefs = ref.watch(preferencesProvider);
+    final usageAccess = ref.watch(usageAccessGrantedProvider);
+    final showAccessBanner = prefs.autoTrackingEnabled && !usageAccess;
+
     return Scaffold(
       appBar: const SleepAppBar(),
       body: SafeArea(
@@ -29,16 +82,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
           padding: const EdgeInsets.fromLTRB(
               AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.lg),
           children: [
-            _scoreCard(session),
+            if (showAccessBanner) ...[
+              _usageAccessBanner(context, ref),
+              const SizedBox(height: AppSpacing.md),
+            ],
+            _scoreCard(context, latest.value),
             const SizedBox(height: AppSpacing.md),
-            _latestSessionCard(session),
+            _latestSessionCard(context, latest.value),
             const SizedBox(height: AppSpacing.md),
-            _autoTrackingRow(),
+            _autoTrackingRow(context, ref, prefs.autoTrackingEnabled),
             const SizedBox(height: AppSpacing.md),
-            _startTrackingButton(),
+            _startTrackingButton(context, ref),
             const SizedBox(height: AppSpacing.md),
-            // Temporary debug entry point to the full-screen alarm (Phase 2
-            // will trigger this automatically).
             TextButton(
               onPressed: () => context.push('/alarm-ringing'),
               child: const Text(
@@ -52,7 +107,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _scoreCard(MockLatestSession session) {
+  Widget _scoreCard(BuildContext context, SleepSession? session) {
+    final score = session?.qualityScore;
     return SurfaceCard(
       padding: const EdgeInsets.symmetric(
           vertical: AppSpacing.lg, horizontal: AppSpacing.md),
@@ -62,20 +118,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
               style: Theme.of(context).textTheme.labelSmall),
           const SizedBox(height: AppSpacing.sm),
           Text(
-            '${session.score}',
+            score?.toString() ?? '--',
             style: Theme.of(context)
                 .textTheme
                 .displayMedium
                 ?.copyWith(color: AppColors.primary),
           ),
           const SizedBox(height: AppSpacing.md),
-          PillBadge(label: session.recoveryLabel),
+          PillBadge(
+            label: score == null ? 'No data yet' : Fmt.recoveryLabel(score),
+            variant: score == null
+                ? PillVariant.info
+                : Fmt.recoveryVariant(score),
+          ),
         ],
       ),
     );
   }
 
-  Widget _latestSessionCard(MockLatestSession session) {
+  Widget _latestSessionCard(BuildContext context, SleepSession? session) {
+    final fellAsleep = session != null ? Fmt.clock(session.startedAt) : '--';
+    final wokeUp = session?.endedAt != null ? Fmt.clock(session!.endedAt!) : '--';
+    final hours = session != null ? session.durationMinutes ~/ 60 : 0;
+    final minutes = session != null ? session.durationMinutes % 60 : 0;
+
     return SurfaceCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -98,7 +164,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 color: AppColors.textPrimary,
               ),
               children: [
-                TextSpan(text: '${session.durationHours}'),
+                TextSpan(text: '$hours'),
                 const TextSpan(
                   text: ' h ',
                   style: TextStyle(
@@ -106,7 +172,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       fontWeight: FontWeight.w400,
                       color: AppColors.textSecondary),
                 ),
-                TextSpan(text: '${session.durationMinutes}'),
+                TextSpan(text: '$minutes'),
                 const TextSpan(
                   text: ' m',
                   style: TextStyle(
@@ -124,9 +190,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _sessionStat('Fell Asleep', session.fellAsleep,
+              _sessionStat(context, 'Fell Asleep', fellAsleep,
                   CrossAxisAlignment.start),
-              _sessionStat('Woke Up', session.wokeUp, CrossAxisAlignment.end),
+              _sessionStat(
+                  context, 'Woke Up', wokeUp, CrossAxisAlignment.end),
             ],
           ),
         ],
@@ -134,7 +201,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _sessionStat(String label, String value, CrossAxisAlignment align) {
+  Widget _sessionStat(BuildContext context, String label, String value,
+      CrossAxisAlignment align) {
     return Column(
       crossAxisAlignment: align,
       children: [
@@ -145,7 +213,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _autoTrackingRow() {
+  Widget _autoTrackingRow(BuildContext context, WidgetRef ref, bool enabled) {
     return SurfaceCard(
       child: Row(
         children: [
@@ -156,19 +224,81 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 style: Theme.of(context).textTheme.titleMedium),
           ),
           Switch(
-            value: _autoTracking,
-            onChanged: (v) => setState(() => _autoTracking = v),
+            value: enabled,
+            onChanged: (v) async {
+              await ref.read(preferencesProvider.notifier).setAutoTracking(v);
+              if (v && context.mounted) {
+                await _ensureUsageAccess(context, ref);
+              }
+            },
           ),
         ],
       ),
     );
   }
 
-  Widget _startTrackingButton() {
+  /// On enabling auto-tracking, check the special usage-access grant and, if
+  /// missing, explain why and offer to open the settings screen.
+  Future<void> _ensureUsageAccess(BuildContext context, WidgetRef ref) async {
+    final service = ref.read(autoTrackingServiceProvider);
+    final granted = await service.hasUsageAccess();
+    ref.read(usageAccessGrantedProvider.notifier).set(granted);
+    if (granted || !context.mounted) return;
+
+    final open = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text('Usage access needed'),
+        content: const Text(
+          'Auto-Sleep Tracking infers your sleep from phone-idle periods. '
+          'This needs the special "Usage access" permission. Open settings to '
+          'grant it?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Not now'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Open settings'),
+          ),
+        ],
+      ),
+    );
+    if (open == true) await service.openUsageAccessSettings();
+  }
+
+  Widget _usageAccessBanner(BuildContext context, WidgetRef ref) {
+    return SurfaceCard(
+      color: AppColors.warning.withValues(alpha: 0.12),
+      border: Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
+      onTap: () => _ensureUsageAccess(context, ref),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline, color: AppColors.warning, size: 20),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Text(
+              'Usage access is off — auto-detection is paused. Tap to re-grant.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _startTrackingButton(BuildContext context, WidgetRef ref) {
     return SizedBox(
       height: 56,
       child: ElevatedButton.icon(
-        onPressed: () => context.go('/track'),
+        onPressed: () {
+          ref.read(trackingControllerProvider.notifier).start();
+          ref.read(manualTrackingServiceProvider).start();
+          context.go('/track');
+        },
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.primary,
           foregroundColor: AppColors.textOnPrimary,

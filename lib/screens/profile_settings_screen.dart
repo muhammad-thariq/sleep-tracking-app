@@ -1,26 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/mock_data.dart';
+import '../state/preferences_provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/sleep_app_bar.dart';
 import '../widgets/surface_card.dart';
 
-class ProfileSettingsScreen extends StatefulWidget {
+class ProfileSettingsScreen extends ConsumerWidget {
   const ProfileSettingsScreen({super.key});
 
   @override
-  State<ProfileSettingsScreen> createState() => _ProfileSettingsScreenState();
-}
-
-class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
-  bool _sleepGoals = true;
-  bool _darkMode = true;
-  bool _notifications = false;
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final prefs = ref.watch(preferencesProvider);
+    final notifier = ref.read(preferencesProvider.notifier);
+
     return Scaffold(
       appBar: const SleepAppBar(),
       body: SafeArea(
@@ -35,7 +31,23 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
             const SizedBox(height: AppSpacing.lg),
             Text('PREFERENCES', style: theme.textTheme.labelSmall),
             const SizedBox(height: AppSpacing.sm),
-            _preferencesCard(theme),
+            SurfaceCard(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  _prefRow(theme, Icons.flag_outlined, 'Sleep Goals',
+                      prefs.sleepGoalsEnabled, notifier.setSleepGoals),
+                  const Divider(
+                      indent: AppSpacing.md, endIndent: AppSpacing.md),
+                  _prefRow(theme, Icons.dark_mode_outlined, 'Dark Mode',
+                      prefs.darkModeEnabled, notifier.setDarkMode),
+                  const Divider(
+                      indent: AppSpacing.md, endIndent: AppSpacing.md),
+                  _prefRow(theme, Icons.notifications_outlined, 'Notifications',
+                      prefs.notificationsEnabled, notifier.setNotifications),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -43,6 +55,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   }
 
   Widget _profileCard(ThemeData theme) {
+    // Avatar / name / year remain mock — no auth in this phase.
     return SurfaceCard(
       padding: const EdgeInsets.symmetric(
           vertical: AppSpacing.lg, horizontal: AppSpacing.md),
@@ -101,26 +114,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     );
   }
 
-  Widget _preferencesCard(ThemeData theme) {
-    return SurfaceCard(
-      padding: EdgeInsets.zero,
-      child: Column(
-        children: [
-          _prefRow(Icons.flag_outlined, 'Sleep Goals', _sleepGoals,
-              (v) => setState(() => _sleepGoals = v)),
-          const Divider(indent: AppSpacing.md, endIndent: AppSpacing.md),
-          _prefRow(Icons.dark_mode_outlined, 'Dark Mode', _darkMode,
-              (v) => setState(() => _darkMode = v)),
-          const Divider(indent: AppSpacing.md, endIndent: AppSpacing.md),
-          _prefRow(Icons.notifications_outlined, 'Notifications',
-              _notifications, (v) => setState(() => _notifications = v)),
-        ],
-      ),
-    );
-  }
-
-  Widget _prefRow(
-      IconData icon, String label, bool value, ValueChanged<bool> onChanged) {
+  Widget _prefRow(ThemeData theme, IconData icon, String label, bool value,
+      ValueChanged<bool> onChanged) {
     return Padding(
       padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.md, vertical: AppSpacing.xs),
@@ -128,10 +123,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         children: [
           Icon(icon, color: AppColors.textSecondary, size: 22),
           const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: Text(label,
-                style: Theme.of(context).textTheme.titleMedium),
-          ),
+          Expanded(child: Text(label, style: theme.textTheme.titleMedium)),
           Switch(value: value, onChanged: onChanged),
         ],
       ),

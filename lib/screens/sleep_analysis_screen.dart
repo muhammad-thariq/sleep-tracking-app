@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../models/mock_data.dart';
+import '../models/disturbance.dart';
+import '../models/sleep_session.dart';
+import '../models/sleep_stage_breakdown.dart';
+import '../services/formatting.dart';
+import '../state/session_providers.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/pill_badge.dart';
@@ -13,12 +18,38 @@ const _lightColor = Color(0xFF6B7280); // gray
 const _remColor = AppColors.primary; // light blue
 const _deepColor = AppColors.success; // green
 
-class SleepAnalysisScreen extends StatelessWidget {
+class SleepAnalysisScreen extends ConsumerStatefulWidget {
   const SleepAnalysisScreen({super.key});
+
+  @override
+  ConsumerState<SleepAnalysisScreen> createState() =>
+      _SleepAnalysisScreenState();
+}
+
+class _SleepAnalysisScreenState extends ConsumerState<SleepAnalysisScreen> {
+  DateTime? _selectedDate;
+
+  DateTime _dateKey(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  DateTime get _effectiveDate {
+    if (_selectedDate != null) return _selectedDate!;
+    final latest = ref.read(latestSessionProvider).value;
+    return _dateKey(latest?.startedAt ?? DateTime.now());
+  }
+
+  void _shiftDay(int deltaDays) {
+    setState(() {
+      _selectedDate =
+          _dateKey(_effectiveDate.add(Duration(days: deltaDays)));
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final date = _effectiveDate;
+    final session = ref.watch(sessionByDateProvider(date));
+
     return Scaffold(
       appBar: const SleepAppBar(),
       body: SafeArea(
@@ -27,15 +58,23 @@ class SleepAnalysisScreen extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(
               AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.lg),
           children: [
-            _dateNavigator(theme),
+            _dateNavigator(theme, date, session),
             const SizedBox(height: AppSpacing.md),
-            _stagesCard(theme),
-            const SizedBox(height: AppSpacing.lg),
-            Text('Disturbances', style: theme.textTheme.titleLarge),
-            const SizedBox(height: AppSpacing.md),
-            for (final d in mockDisturbances) ...[
-              _disturbanceCard(theme, d),
+            if (session == null)
+              _emptyState(theme)
+            else ...[
+              _stagesCard(theme, session),
+              const SizedBox(height: AppSpacing.lg),
+              Text('Disturbances', style: theme.textTheme.titleLarge),
               const SizedBox(height: AppSpacing.md),
+              if (session.disturbances.isEmpty)
+                Text('No disturbances recorded.',
+                    style: theme.textTheme.bodyMedium)
+              else
+                for (final d in session.disturbances) ...[
+                  _disturbanceCard(theme, d),
+                  const SizedBox(height: AppSpacing.md),
+                ],
             ],
           ],
         ),
@@ -43,39 +82,81 @@ class SleepAnalysisScreen extends StatelessWidget {
     );
   }
 
-  Widget _dateNavigator(ThemeData theme) {
+  Widget _dateNavigator(
+      ThemeData theme, DateTime date, SleepSession? session) {
+    final isToday = _dateKey(DateTime.now()) == date;
     return Row(
       children: [
-        const Icon(Icons.chevron_left, color: AppColors.textSecondary),
+        IconButton(
+          icon: const Icon(Icons.chevron_left, color: AppColors.textSecondary),
+          onPressed: () => _shiftDay(-1),
+        ),
         Expanded(
           child: Column(
             children: [
-              Text('Last Night', style: theme.textTheme.titleMedium),
+              Text(isToday ? 'Last Night' : Fmt.dayLabel(date),
+                  style: theme.textTheme.titleMedium),
               const SizedBox(height: 2),
-              Text('Oct 24 – Oct 25', style: theme.textTheme.bodyMedium),
+              Text(Fmt.nightRange(date, session?.endedAt),
+                  style: theme.textTheme.bodyMedium),
             ],
           ),
         ),
-        const Icon(Icons.chevron_right, color: AppColors.textSecondary),
+        IconButton(
+          icon:
+              const Icon(Icons.chevron_right, color: AppColors.textSecondary),
+          onPressed: () => _shiftDay(1),
+        ),
       ],
     );
   }
 
-  Widget _stagesCard(ThemeData theme) {
-    final s = mockSleepStages;
+  Widget _emptyState(ThemeData theme) {
+    return SurfaceCard(
+      padding: const EdgeInsets.symmetric(
+          vertical: AppSpacing.xl, horizontal: AppSpacing.md),
+      child: Column(
+        children: [
+          const Icon(Icons.bedtime_outlined,
+              color: AppColors.textTertiary, size: 36),
+          const SizedBox(height: AppSpacing.md),
+          Text('No sleep recorded for this night',
+              style: theme.textTheme.titleMedium, textAlign: TextAlign.center),
+          const SizedBox(height: AppSpacing.xs),
+          Text('Track a session or enable auto-detection to see analysis here.',
+              style: theme.textTheme.bodyMedium, textAlign: TextAlign.center),
+        ],
+      ),
+    );
+  }
+
+  Widget _stagesCard(ThemeData theme, SleepSession session) {
+    final s = session.stageBreakdown;
+    final start = session.startedAt;
+    final end = session.endedAt ?? start;
+    final mid = start.add(Duration(
+        milliseconds: end.difference(start).inMilliseconds ~/ 2));
+
     return SurfaceCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('SLEEP STAGES', style: theme.textTheme.labelSmall),
+          Row(
+            children: [
+              Text('SLEEP STAGES', style: theme.textTheme.labelSmall),
+              const Spacer(),
+              if (session.source == SleepSource.auto)
+                const PillBadge(label: 'Auto-detected', variant: PillVariant.info),
+            ],
+          ),
           const SizedBox(height: AppSpacing.sm),
           Row(
             children: [
-              Text(s.totalDuration,
+              Text(Fmt.durationHm(session.durationMinutes),
                   style: theme.textTheme.titleLarge
                       ?.copyWith(fontWeight: FontWeight.w700)),
               const SizedBox(width: AppSpacing.md),
-              PillBadge(label: s.statusLabel),
+              PillBadge(label: _qualityLabel(session.qualityScore)),
             ],
           ),
           const SizedBox(height: AppSpacing.md),
@@ -84,9 +165,9 @@ class SleepAnalysisScreen extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(s.startTime, style: theme.textTheme.labelSmall),
-              Text(s.midTime, style: theme.textTheme.labelSmall),
-              Text(s.endTime, style: theme.textTheme.labelSmall),
+              Text(Fmt.clock(start), style: theme.textTheme.labelSmall),
+              Text(Fmt.clock(mid), style: theme.textTheme.labelSmall),
+              Text(Fmt.clock(end), style: theme.textTheme.labelSmall),
             ],
           ),
           const SizedBox(height: AppSpacing.md),
@@ -105,24 +186,35 @@ class SleepAnalysisScreen extends StatelessWidget {
     );
   }
 
-  Widget _stackedBar(MockSleepStages s) {
+  String _qualityLabel(int score) => score >= 70 ? 'Optimal' : 'Fair';
+
+  Widget _stackedBar(SleepStageBreakdown stage) {
+    int flex(double pct) => (pct * 10).round().clamp(1, 1000);
     return ClipRRect(
       borderRadius: BorderRadius.circular(AppSpacing.xs),
       child: SizedBox(
         height: 14,
         child: Row(
           children: [
-            Expanded(flex: s.awakePercent, child: Container(color: _awakeColor)),
-            Expanded(flex: s.lightPercent, child: Container(color: _lightColor)),
-            Expanded(flex: s.remPercent, child: Container(color: _remColor)),
-            Expanded(flex: s.deepPercent, child: Container(color: _deepColor)),
+            Expanded(
+                flex: flex(stage.awakePercent),
+                child: Container(color: _awakeColor)),
+            Expanded(
+                flex: flex(stage.lightPercent),
+                child: Container(color: _lightColor)),
+            Expanded(
+                flex: flex(stage.remPercent),
+                child: Container(color: _remColor)),
+            Expanded(
+                flex: flex(stage.deepPercent),
+                child: Container(color: _deepColor)),
           ],
         ),
       ),
     );
   }
 
-  Widget _legend(ThemeData theme, Color color, String label, int percent) {
+  Widget _legend(ThemeData theme, Color color, String label, double percent) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -132,15 +224,15 @@ class SleepAnalysisScreen extends StatelessWidget {
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: AppSpacing.xs + 2),
-        Text('$label $percent%',
+        Text('$label ${percent.round()}%',
             style: theme.textTheme.bodyMedium
                 ?.copyWith(color: AppColors.textSecondary)),
       ],
     );
   }
 
-  Widget _disturbanceCard(ThemeData theme, MockDisturbance d) {
-    final isNoise = d.type == DisturbanceType.noise;
+  Widget _disturbanceCard(ThemeData theme, Disturbance d) {
+    final isNoise = d.type == DisturbanceType.environmentalNoise;
     return SurfaceCard(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -154,7 +246,10 @@ class SleepAnalysisScreen extends StatelessWidget {
                   : AppColors.surfaceElevated,
               shape: BoxShape.circle,
             ),
-            child: Icon(d.icon,
+            child: Icon(
+                isNoise
+                    ? Icons.volume_up_rounded
+                    : Icons.directions_walk_rounded,
                 size: 20,
                 color: isNoise ? AppColors.warning : AppColors.textSecondary),
           ),
@@ -166,10 +261,12 @@ class SleepAnalysisScreen extends StatelessWidget {
                 Row(
                   children: [
                     Expanded(
-                      child: Text(d.title,
+                      child: Text(
+                          isNoise ? 'Loud Noise Detected' : 'Restless Movement',
                           style: theme.textTheme.titleMedium),
                     ),
-                    Text(d.time, style: theme.textTheme.bodyMedium),
+                    Text(Fmt.clock(d.timestamp),
+                        style: theme.textTheme.bodyMedium),
                   ],
                 ),
                 const SizedBox(height: AppSpacing.xs),
