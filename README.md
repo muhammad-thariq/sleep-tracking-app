@@ -237,16 +237,6 @@ Since this is an HCI course, a lot of our decisions came down to making the app 
 - Pretty much everything (alarms, each sensor, each preference) is its own toggle, so you stay in control, and tapping a tab you're already on takes you back to its start.
 - We kept one **dark theme** with shared spacing and colour tokens and reused the same card and badge widgets everywhere, partly for consistency and partly because a dim, low-glare screen is just kinder to look at before bed.
 
-## What's Still Missing
-
-We want to be honest about the rough edges:
-
-- **The stage breakdown is a stub.** Real per-minute stage detection was out of scope, so manual sessions use a baseline nudged by disturbances and auto sessions use a flat estimate. That's exactly what the "Auto-detected" label is warning you about.
-- **Smart alarms fire at the start of the window** rather than checking your live sleep stage to pick the lightest moment, because that data isn't available inside the alarm's background isolate yet.
-- **Auto-detection can't really tell** sleeping apart from a phone left idle on the nightstand.
-- **It's Android-first.** Alarms, usage-access detection, and foreground services are all Android-specific, so iOS is only partially there.
-- **There's no login yet.** The profile (avatar, name, year) is placeholder data, but all the actual sleep, alarm, and preference data is real and saved on the device.
-
 ---
 
 <div align="center">
